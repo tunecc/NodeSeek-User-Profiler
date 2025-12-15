@@ -3,8 +3,8 @@
 // @name:zh-CN   NodeSeek 用户画像生成器
 // @name:en      NodeSeek User Profiler
 // @namespace    https://github.com/tunecc/NodeSeek-User-Profiler
-// @version      2.0.0
-// @description  【API直连】支持多线程并发、不刷新页面、导出Markdown/CSV、生成符合 NodeSeek 生态的 AI 分析指令。
+// @version      3.2
+// @description  自动爬取NodeSeek用户的评论导出Markdown/CSV、生成符合 NodeSeek 生态的 AI 分析指令。
 // @author       Tune
 // @author       Tune
 // @homepage     https://github.com/tunecc/NodeSeek-User-Profiler
@@ -24,8 +24,10 @@
 
     // --- 配置区域 ---
     const CONFIG = {
-        CONCURRENCY: 5,   // 并发线程数
-        DELAY: 150        // 请求间隔(ms)
+        CONCURRENCY: 3,       // 并发线程数
+        API_DELAY: 150,       // 🚀 API模式请求间隔 (ms)
+        DEEP_DELAY: 500,      // 🛡️ 深挖模式请求间隔 (ms)
+        PER_PAGE_FLOOR: 10    // 硬编码：每页10楼
     };
 
     // 状态管理
@@ -33,11 +35,14 @@
         isRunning: false,
         processedPages: 0,
         maxPage: 10,
-        totalItems: 0
+        totalItems: 0,
+        deepMode: false,      // 是否开启深挖
+        deepProgress: 0
     };
     let allReplies = [];
+    let replyMap = new Map(); // 用于地毯式扫描的索引
 
-    // --- 1. 样式注入 (保持原版 UI 风格) ---
+    // --- 1. 样式注入 (保持原版 File 12 风格) ---
     function injectStyles() {
         const style = document.createElement('style');
         style.innerHTML = `
@@ -63,18 +68,24 @@
             .ns-title { font-size: 18px; font-weight: 700; color: #1d1d1f; letter-spacing: -0.5px; }
             .ns-close { cursor: pointer; opacity: 0.4; transition: 0.2s; font-size: 18px; }
             .ns-close:hover { opacity: 1; transform: rotate(90deg); }
-            .ns-input-wrap { display: flex; align-items: center; background: #fff; border-radius: 12px; padding: 10px 14px; margin-bottom: 20px; border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
-            .ns-input { border: none; outline: none; font-size: 16px; font-weight: 600; width: 60px; text-align: center; color: #007AFF; margin-left: auto; }
+            
+            /* 统一的输入框容器样式 */
+            .ns-input-wrap { display: flex; align-items: center; justify-content: space-between; background: #fff; border-radius: 12px; padding: 10px 14px; margin-bottom: 10px; border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
+            .ns-input { border: none; outline: none; font-size: 16px; font-weight: 600; width: 60px; text-align: center; color: #007AFF; }
+            .ns-label-row { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #333; font-weight: 500; }
+
             .ns-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
             .ns-stat { background: #fff; padding: 12px; border-radius: 14px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.04); }
             .ns-stat-label { font-size: 11px; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 600; }
             .ns-stat-val { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
+            
             .ns-progress-track { height: 6px; background: rgba(0,0,0,0.06); border-radius: 3px; overflow: hidden; margin: 20px 0 10px 0; }
             .ns-progress-fill { height: 100%; background: var(--ns-primary); width: 0%; transition: width 0.3s; }
+            
             .ns-btn { width: 100%; border: none; padding: 14px; border-radius: 14px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; transition: transform 0.1s, opacity 0.2s; box-shadow: 0 8px 20px rgba(0,0,0,0.12); margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; }
             .ns-btn:active { transform: scale(0.96); }
             .ns-btn:hover { opacity: 0.95; }
-            .ns-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+            .ns-btn:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(100%); }
             .ns-btn-start { background: var(--ns-success); }
             .ns-btn-stop { background: var(--ns-danger); }
             .ns-btn-md { background: var(--ns-orange); box-shadow: 0 4px 15px rgba(255, 149, 0, 0.25); }
@@ -82,8 +93,20 @@
             .ns-btn-csv { background: var(--ns-purple); box-shadow: 0 4px 15px rgba(175, 82, 222, 0.25); }
             .ns-btn-clear { background: var(--ns-danger); margin-top: 5px; box-shadow: 0 4px 15px rgba(255, 59, 48, 0.25); }
             .ns-actions { display: flex; flex-direction: column; gap: 2px; }
-            .ns-toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px 30px; border-radius: 16px; box-shadow: 0 10px 40px rgba(102, 126, 234, 0.5); z-index: 20000; font-size: 16px; font-weight: bold; text-align: center; line-height: 1.6; white-space: pre-line; animation: nsFadeIn 0.3s ease-out; }
+            
+            .ns-toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px 30px; border-radius: 16px; box-shadow: 0 10px 40px rgba(102, 126, 234, 0.5); z-index: 20000; font-size: 15px; font-weight: bold; text-align: center; line-height: 1.5; white-space: pre-line; animation: nsFadeIn 0.3s ease-out; max-width: 80%; }
             @keyframes nsFadeIn { from { opacity:0; transform: translate(-50%, -40%); } to { opacity:1; transform: translate(-50%, -50%); } }
+
+            /* --- 🟢 新增：iOS 风格开关与帮助图标 --- */
+            .ns-switch { position: relative; display: inline-block; width: 44px; height: 26px; }
+            .ns-switch input { opacity: 0; width: 0; height: 0; }
+            .ns-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #e5e5ea; transition: .4s; border-radius: 34px; }
+            .ns-slider:before { position: absolute; content: ""; height: 22px; width: 22px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+            input:checked + .ns-slider { background-color: #34C759; }
+            input:checked + .ns-slider:before { transform: translateX(18px); }
+            
+            .ns-help-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: #86868b; color: white; font-size: 12px; font-weight: bold; margin-left: 6px; cursor: pointer; opacity: 0.6; transition: 0.2s; }
+            .ns-help-icon:hover { opacity: 1; transform: scale(1.1); background: #007AFF; }
         `;
         document.head.appendChild(style);
     }
@@ -124,7 +147,7 @@
         document.body.appendChild(btn);
     }
 
-    // --- 3. 控制面板 (UI逻辑保持不变) ---
+    // --- 3. 控制面板 (UI微调：增加深挖开关) ---
     function createControlPanel() {
         if (document.getElementById('ns-panel')) return;
 
@@ -133,21 +156,34 @@
         panel.className = 'ns-panel';
         panel.innerHTML = `
             <div class="ns-header">
-                <div class="ns-title">成分分析器 (API版)</div>
+                <div class="ns-title">成分分析器</div>
                 <div class="ns-close" id="ns-close">✕</div>
             </div>
 
             <div id="ns-config">
                 <div class="ns-input-wrap">
-                    <span style="font-size:14px; color:#333; font-weight:500;">📅 采集页数</span>
+                    <div class="ns-label-row">
+                        📅 采集页数
+                    </div>
                     <input type="number" id="ns-pages" class="ns-input" value="10" min="1">
+                </div>
+                
+                <div class="ns-input-wrap">
+                    <div class="ns-label-row">
+                        🕵️ 深挖模式
+                        <div class="ns-help-icon" id="ns-help-tip">?</div>
+                    </div>
+                    <label class="ns-switch">
+                        <input type="checkbox" id="ns-deep-mode">
+                        <span class="ns-slider"></span>
+                    </label>
                 </div>
             </div>
 
             <div class="ns-grid">
                 <div class="ns-stat">
-                    <div class="ns-stat-label">处理进度</div>
-                    <div class="ns-stat-val" style="color:#007AFF" id="ns-page-txt">0 / -</div>
+                    <div class="ns-stat-label">当前进度</div>
+                    <div class="ns-stat-val" style="color:#007AFF; font-size:14px;" id="ns-page-txt">待机</div>
                 </div>
                 <div class="ns-stat">
                     <div class="ns-stat-label">已采集</div>
@@ -187,8 +223,13 @@
         document.getElementById('ns-csv').onclick = exportToCSV;
         document.getElementById('ns-copy').onclick = copyToClipboard;
         document.getElementById('ns-clear').onclick = clearData;
+        
+        // 🟢 绑定帮助提示点击事件
+        document.getElementById('ns-help-tip').onclick = () => {
+            showToast(`💡 深挖模式说明\n\n✅ 自动获取被截断的长回复完整内容\n✅ 自动标记引用内容，避免AI混淆\n\n⚠️ 开启后速度会变慢，以防止账号被风控`, 5000);
+        };
 
-
+        // 自动检测页数
         const realMax = detectTotalPages();
         if (realMax > 1) {
             document.getElementById('ns-pages').value = realMax;
@@ -196,21 +237,17 @@
         }
     }
 
-    // --- 4. 核心提取逻辑 (已替换为 API 并发) ---
+    // --- 4. 核心提取逻辑 (API + 自动深挖) ---
 
-    // 依然保留这个DOM检测函数，因为它很好用，能直接从界面读出总页数
     function detectTotalPages() {
         const pagination = document.querySelector('div[role="navigation"][aria-label="pagination"]');
         if (!pagination) return 1;
-
         let max = 1;
         const links = pagination.querySelectorAll('.pager-pos');
         links.forEach(el => {
             const txt = el.innerText.trim().replace(/\.\./g, '');
             const num = parseInt(txt);
-            if (!isNaN(num) && num > max) {
-                max = num;
-            }
+            if (!isNaN(num) && num > max) max = num;
         });
         return max;
     }
@@ -220,73 +257,157 @@
         if (!uidMatch) return showToast("❌ 请在用户空间页面使用");
         const uid = uidMatch[1];
         
-        // 获取输入页数
         const inputPages = parseInt(document.getElementById('ns-pages').value) || 10;
+        const isDeep = document.getElementById('ns-deep-mode').checked; 
         
         state.isRunning = true;
         state.processedPages = 0;
         state.maxPage = inputPages;
-        allReplies = []; // 每次重新开始清空，或者你可以选择保留
+        state.deepMode = isDeep;
+        state.deepProgress = 0;
+        allReplies = [];
+        replyMap.clear();
         
         toggleUI(true);
         updateStatus("🚀 正在建立 API 连接...");
 
-        // 构造任务队列
+        // 构造任务
         const tasks = [];
         for (let i = 1; i <= inputPages; i++) tasks.push(i);
-        
-        const totalTasks = tasks.length;
 
-        // 并发 Worker
-        const worker = async () => {
+        // API Worker
+        const apiWorker = async () => {
             while (tasks.length > 0 && state.isRunning) {
                 const page = tasks.shift();
                 try {
-                    updateStatus(`⚡ 正在请求第 ${page} 页...`);
-                    
-                    // API 请求
+                    updateStatus(`⚡ 正在API请求第 ${page} 页...`);
                     const res = await fetch(`/api/content/list-comments?uid=${uid}&page=${page}`);
                     const json = await res.json();
                     
                     if (json && json.comments && json.comments.length > 0) {
                         const newItems = json.comments.map(item => ({
                             page: page,
+                            post_id: item.post_id,
+                            floor_id: item.floor_id,
                             title: item.title || "无标题",
-                            content: item.text || "无内容",
-                            // 兼容性字段，方便 CSV 导出
+                            content: item.text || "无内容", 
+                            isFull: false, 
                             url: `https://www.nodeseek.com/post-${item.post_id}-1#${item.floor_id}`
                         }));
                         
-                        allReplies.push(...newItems);
+                        // 建立索引，方便后续“顺手牵羊”
+                        newItems.forEach(item => {
+                            allReplies.push(item);
+                            replyMap.set(`${item.post_id}-${item.floor_id}`, item);
+                        });
+                        
                         state.totalItems = allReplies.length;
                     } else {
-                        // 如果某一页空了，说明后面可能也没了，但为了保险，我们只停止当前线程的任务
-                        // 也可以选择 tasks.length = 0 直接结束所有
-                        if (json.comments && json.comments.length === 0) {
-                            tasks.length = 0; // 智能停止
-                        }
+                        if (json.comments && json.comments.length === 0) tasks.length = 0; 
                     }
 
                     state.processedPages++;
                     updateUI();
                     
-                    await sleep(CONFIG.DELAY);
+                    // 🚀 阶段1：极速延迟
+                    await sleep(CONFIG.API_DELAY);
 
                 } catch (e) {
                     console.error(`Page ${page} Error:`, e);
-                    await sleep(1000); // 错误等待
+                    await sleep(1000);
                 }
             }
         };
 
-        // 启动并发
+        // 启动 API 并发
         const threads = [];
-        for (let i = 0; i < CONFIG.CONCURRENCY; i++) {
-            threads.push(worker());
-        }
-
+        for (let i = 0; i < CONFIG.CONCURRENCY; i++) threads.push(apiWorker());
         await Promise.all(threads);
 
+        // 如果开启了深挖模式，进入第二阶段
+        if (state.isRunning && allReplies.length > 0 && state.deepMode) {
+            await startDeepScanning();
+        } else {
+            finish();
+        }
+    }
+
+    // 深挖逻辑 (地毯式扫描)
+    async function startDeepScanning() {
+        const deepTasks = [...allReplies]; 
+        state.totalItems = deepTasks.length; // 总任务数
+        
+        updateStatus(`🔍 正在深挖 ${state.totalItems} 条完整内容...`);
+        
+        const deepWorker = async () => {
+            while (deepTasks.length > 0 && state.isRunning) {
+                const item = deepTasks.shift();
+                
+                // 如果已经被之前的请求顺手抓了，跳过
+                if (item.isFull) {
+                    state.deepProgress++;
+                    updateUI();
+                    continue; 
+                }
+
+                try {
+                    // 计算页码 (硬编码每页10楼)
+                    let targetPage = Math.ceil(item.floor_id / CONFIG.PER_PAGE_FLOOR);
+                    if (targetPage < 1) targetPage = 1;
+                    
+                    updateStatus(`📥 扫描: 帖子${item.post_id} - P${targetPage}`);
+                    
+                    const res = await fetch(`/post-${item.post_id}-${targetPage}`);
+                    const text = await res.text();
+                    const doc = new DOMParser().parseFromString(text, 'text/html');
+                    
+                    // 扫描全页所有楼层
+                    const floorLinks = doc.querySelectorAll('.floor-link');
+                    
+                    floorLinks.forEach(link => {
+                        const currentFloorId = parseInt(link.innerText.replace('#', ''));
+                        const mapKey = `${item.post_id}-${currentFloorId}`;
+                        const targetItem = replyMap.get(mapKey);
+                        
+                        // 只要是我们要找的，还没满的，统统抓下来
+                        if (targetItem && !targetItem.isFull) {
+                            const container = link.closest('.content-item') || link.closest('.post-item') || link.closest('li');
+                            if (container) {
+                                const contentEl = container.querySelector('.post-content');
+                                if (contentEl) {
+                                    // 清洗引用: 变更为文本标记
+                                    const cleanEl = contentEl.cloneNode(true);
+                                    const quotes = cleanEl.querySelectorAll('blockquote');
+                                    quotes.forEach(q => {
+                                        const qt = q.innerText.replace(/\n/g, ' ').trim();
+                                        const mark = document.createTextNode(` (引用上下文: ${qt}) `);
+                                        q.parentNode.replaceChild(mark, q);
+                                    });
+                                    
+                                    targetItem.content = cleanEl.innerText.trim();
+                                    targetItem.isFull = true;
+                                }
+                            }
+                        }
+                    });
+                    
+                    state.deepProgress++;
+                    updateUI();
+                    
+                    // 🛡️ 阶段2：安全延迟
+                    await sleep(CONFIG.DEEP_DELAY);
+                    
+                } catch (e) {
+                    console.error(`Fetch failed: ${item.post_id}`, e);
+                    await sleep(1000);
+                }
+            }
+        };
+        
+        const dThreads = [];
+        for (let i = 0; i < CONFIG.CONCURRENCY; i++) dThreads.push(deepWorker());
+        await Promise.all(dThreads);
+        
         finish();
     }
 
@@ -300,42 +421,43 @@
         state.isRunning = false;
         toggleUI(false);
         updateStatus("✨ 采集完成");
-        showToast(`✅ 采集完成\n共抓取 ${allReplies.length} 条回复`);
+        showToast(`✅ 采集完成\n共 ${allReplies.length} 条数据`);
     }
 
-    // --- 5. 导出逻辑  ---
+    // --- 5. 导出逻辑 (Prompt 保持原版 12.js 内容) ---
 
     function generatePrompt() {
         const uid = window.location.href.match(/\/space\/(\d+)/)?.[1] || 'User';
         const date = new Date().toLocaleString();
         
-        let md = `# NodeSeek 用户画像分析任务\n\n`;
-        md += `## 📋 任务说明\n你是一位专业的用户行为分析师，精通 **NodeSeek (一个以VPS、服务器、网络技术、和羊毛信息为主的垂直社区)** 的文化与黑话。请根据下方提供的用户回复数据，深入分析该用户的完整人物画像。\n\n`;
-        md += `## 👤 分析对象\n- **用户ID**: ${uid}\n- **回复总数**: ${allReplies.length}\n- **提取时间**: ${date}\n\n`;
+        let md = `> ⚠️ **本内容为AI生成** \n\n`;
+        md += `# NodeSeek 用户画像分析任务\n\n`;
+        md += `## 📋 任务说明\n你是一位专业的用户行为分析师，精通 **NodeSeek (一个以VPS、服务器、网络技术、数字货币和羊毛信息为主的垂直社区)** 的文化与黑话。请根据下方提供的用户回复数据，深入分析该用户的完整人物画像。\n\n`;
+        md += `> **注意**：部分长回复可能因为 NodeSeek API 列表限制而显示为截断状态（以 ... 结尾）。请基于现有的内容片段进行分析，无需臆测缺失部分。\n\n`;
+        md += `## 👤 分析对象\n- **用户ID**: ${uid}\n- **来源**: NodeSeek\n- **回复总数**: ${allReplies.length}\n- **数据提取时间**: ${date}\n\n`;
         md += `## 💬 完整回复记录\n\n`;
 
-        // 聚合去重
         const groupedMap = new Map();
         allReplies.forEach(item => {
             if (!groupedMap.has(item.title)) {
-                groupedMap.set(item.title, []);
+                groupedMap.set(item.title, { page: item.page, replies: [] });
             }
-            if (!groupedMap.get(item.title).includes(item.content)) {
-                groupedMap.get(item.title).push(item.content);
+            if (!groupedMap.get(item.title).replies.includes(item.content)) {
+                groupedMap.get(item.title).replies.push(item.content);
             }
         });
 
         let index = 1;
-        for (const [title, replies] of groupedMap) {
-            md += `### 主题 #${index}: ${title}\n`;
-            replies.forEach(c => md += `> ${c.replace(/\n/g, ' ')}\n`);
-            md += `\n`;
+        for (const [title, data] of groupedMap) {
+            md += `### 主题 #${index}\n**所在页码**: ${data.page}\n**帖子标题**: ${title}\n**回复内容**:\n`;
+            data.replies.forEach(content => md += `> ${content.replace(/\n/g, '\n> ')}\n\n`);
+            md += `---\n`;
             index++;
         }
 
-        // 添加原版 Prompt + 新增欺诈指数
         md += `
 ---
+
 ## 🎯 分析任务要求
 
 请基于以上所有回复数据，从以下维度深入分析该用户，并生成一份详细的**量化用户画像报告**。
@@ -473,9 +595,9 @@
 ### 13. 生活地域推断 🏠
 **不评分，仅推断**
 **分析要点**:
-- **居住城市**: (根据讨论的宽带运营商、提及的地点、时区推断)
+- **居住城市**: _____ (根据讨论的宽带运营商、提及的地点、时区推断)
 - **证据强度**: 强/中/弱
-- **可能的活动范围**:
+- **可能的活动范围**: _____
 
 ---
 
@@ -528,6 +650,7 @@
 - 主要性格特征: _____
 
 ---
+
 ## 📋 输出格式要求
 
 1. **严格按照评分标准打分**，不得凭感觉评分
@@ -561,18 +684,18 @@
         const md = generatePrompt();
         const uid = window.location.href.match(/\/space\/(\d+)/)?.[1] || 'User';
         download(md, `nodeseek_${uid}_analysis.md`, 'text/markdown');
-        showToast(`✅ 成功导出 MD\n${allReplies.length} 条回复`);
+        showToast(`✅ 成功导出 MD\n文件名: nodeseek_${uid}_analysis.md\n回复数: ${allReplies.length} 条`);
     }
 
     function exportToCSV() {
         if (allReplies.length === 0) return showToast('没有数据可导出');
-        const headers = ['页码', '帖子标题', '回复内容', '链接'];
+        const headers = ['页码', '帖子标题', '回复内容'];
         let csv = '\uFEFF' + headers.join(',') + '\n';
         allReplies.forEach(r => {
-            csv += `${r.page},"${(r.title||'').replace(/"/g,'""')}","${(r.content||'').replace(/"/g,'""')}","${r.url}"\n`;
+            csv += `${r.page},"${(r.title||'').replace(/"/g,'""')}","${(r.content||'').replace(/"/g,'""')}"\n`;
         });
-        download(csv, `nodeseek_${Date.now()}.csv`, 'text/csv');
-        showToast(`✅ 成功导出 CSV`);
+        download(csv, 'nodeseek_replies.csv', 'text/csv');
+        showToast(`✅ 成功导出 CSV\n共 ${allReplies.length} 条`);
     }
 
     async function copyToClipboard() {
@@ -580,7 +703,7 @@
         try {
             const md = generatePrompt();
             await navigator.clipboard.writeText(md);
-            showToast(`✅ 复制成功！\n${allReplies.length} 条回复`);
+            showToast(`✅ 复制成功！\n${allReplies.length} 条回复已存入剪贴板`);
         } catch(e) {
             alert('复制失败，请手动导出');
         }
@@ -590,7 +713,7 @@
         if(confirm('确定清空所有数据吗？')) {
             allReplies = [];
             state.processedPages = 0;
-            state.totalItems = 0;
+            state.deepProgress = 0;
             updateUI();
             showToast('🗑️ 数据已清空');
         }
@@ -604,11 +727,25 @@
         const elBar = document.getElementById('ns-bar');
         
         if (elCount) elCount.innerText = allReplies.length;
-        if (elPage) elPage.innerText = `${state.processedPages} / ${state.maxPage}`;
         
-        if (elBar && state.maxPage > 0) {
-            const pct = Math.min(100, (state.processedPages / state.maxPage) * 100);
-            elBar.style.width = `${pct}%`;
+        if (elPage) {
+            if (state.deepMode && state.totalItems > 0 && state.processedPages >= state.maxPage) {
+                // 显示深挖进度
+                elPage.innerText = `深挖 ${state.deepProgress} / ${state.totalItems}`;
+                if (elBar) {
+                    const pct = Math.min(100, (state.deepProgress / state.totalItems) * 100);
+                    elBar.style.width = `${pct}%`;
+                    elBar.style.background = 'linear-gradient(135deg, #AF52DE, #BF5AF2)'; // 紫色进度条
+                }
+            } else {
+                // 显示API进度
+                elPage.innerText = `API ${state.processedPages} / ${state.maxPage}`;
+                if (elBar && state.maxPage > 0) {
+                    const pct = Math.min(100, (state.processedPages / state.maxPage) * 100);
+                    elBar.style.width = `${pct}%`;
+                    elBar.style.background = 'var(--ns-primary)'; // 蓝色进度条
+                }
+            }
         }
     }
 
@@ -619,8 +756,11 @@
         
         if(startArea) startArea.style.display = running ? 'none' : 'block';
         if(stopArea) stopArea.style.display = running ? 'block' : 'none';
-        if(config) config.style.opacity = running ? '0.5' : '1';
-        if(config) document.getElementById('ns-pages').disabled = running;
+        if(config) {
+            // 深挖开关和输入框都禁用
+            document.getElementById('ns-pages').disabled = running;
+            document.getElementById('ns-deep-mode').disabled = running;
+        }
     }
 
     function updateStatus(text) {
@@ -628,14 +768,15 @@
         if(el) el.innerText = text;
     }
 
-    function showToast(msg) {
+    function showToast(msg, duration = 2500) {
         const t = document.createElement('div');
         t.className = 'ns-toast';
         t.innerText = msg;
         document.body.appendChild(t);
-        setTimeout(()=>t.remove(), 2500);
+        // 使用传入的 duration 参数，如果未传入，则默认为 2500ms (2.5秒)
+        setTimeout(() => t.remove(), duration);
     }
-
+    
     function download(content, filename, type) {
         const blob = new Blob([content], {type});
         const a = document.createElement('a');
