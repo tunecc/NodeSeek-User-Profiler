@@ -1,5 +1,35 @@
-原脚本来自v2ex
-https://v2ex.com/t/1169590
+NodeSeek介绍帖子：https://www.nodeseek.com/post-543992-1
 
-点击下载
-https://github.com/tunecc/NodeSeek-User-Profiler/raw/refs/heads/main/NS_UP.user.js
+# 前言
+
+前段时间隔壁[ V2EX 的“成分分析器”](https://v2ex.com/t/1169590)很火，我觉得挺好用，就AI改了一个适配 NodeSeek 的版本
+
+# 有什么用？
+
+它可以一键抓取目标用户的历史回复，生成一份详细的、结构化的 **AI 分析报告**（包含评分标准和分析维度），直接投喂给 GPT/Gemini 等大模型。
+
+项目地址：https://github.com/tunecc/NodeSeek-User-Profiler （欢迎 Star😁）
+
+# 如何使用
+
+1. 在电脑上[安装好Tampermonkey](https://www.tampermonkey.net/)，并且按Tampermonkey **提示启用开发者模式**
+2. [点我下载](https://update.greasyfork.org/scripts/559093/NodeSeek%20%E7%94%A8%E6%88%B7%E7%94%BB%E5%83%8F%E7%94%9F%E6%88%90%E5%99%A8.user.js)
+3. 进入你想分析的 用户主页 -> 评论。
+4. 点击右下角的 📊 悬浮球。
+5. **不推荐** 勾选 **“🕵️ 深挖模式”**（从原帖获取完整评论）。评论多的话，这个采集时间会很长
+6. 点击 “开始采集”，坐等跑完。
+7. 点击 “复制 Markdown” 或 **“导出 MD”**（推荐）。
+8. 把内容扔给AI，等待分析结果！
+
+# 更新历史
+
+* v1.0 脚本的基本功能完善，通过跳转网页的形式进行爬取，速度特别慢
+* v2.0 调用NodeSeek的API进行爬取，速度快了几倍
+* v3.0 评论内容过长时，在用户的界面显示不完整，新功能“深挖模式”解决，获取到完整的评论，让AI“更懂你”；到处内容添加AI生成的置顶提示，避免污染后续分析的数据
+* v3.3 修复API模式后是空数据时，不会显示到深挖模式进度；API模式内容截断的Promot的提示
+
+以上都在 2025.12.15 完成
+
+# 碎碎念
+
+第一次做一个受这么多人喜欢的项目（虽然创意是抄的，代码是AI改的），大家的每一个赞都让我受到了莫大的鼓励，同时我也感慨现在AI发展的神速，两年多的时间就有这么大的进步，不敢想象以后的世界，最后感谢Google给薅的学生包

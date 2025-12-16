@@ -5,6 +5,7 @@
 // @namespace    https://github.com/tunecc/NodeSeek-User-Profiler
 // @version      3.3
 // @description  自动爬取NodeSeek用户的评论导出Markdown/CSV、生成符合 NodeSeek 生态的 AI 分析指令。
+// @description:en  Automatically crawl NodeSeek users' comments, export them as Markdown/CSV, and generate AI analysis commands that comply with the NodeSeek ecosystem.
 // @author       Tune
 // @author       Tune
 // @homepage     https://github.com/tunecc/NodeSeek-User-Profiler
